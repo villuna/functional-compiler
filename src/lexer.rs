@@ -1,7 +1,7 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, take},
-    character::complete::{digit1, satisfy, one_of},
+    character::complete::{digit1, one_of, satisfy},
     combinator::recognize,
     multi::{many0, many0_count},
     sequence::pair,

@@ -35,6 +35,7 @@ pub trait Sequence: Clone + Sized + fmt::Display {
 // This is how it's implemented in the textbook
 // Obviously what's good for a FP language like miranda (or haskell) isn't necessarily good for
 // rust, so I'll do a different implementation later
+// if i cbf
 #[derive(Clone)]
 pub enum FpSeq {
     None,
@@ -118,17 +119,22 @@ impl CoreExpr {
         match &self {
             &Expr::Number(n) => S::from_str(&format!("{n}")),
             &Expr::Variable(v) => S::from_str(&format!("{v}")),
-            &Expr::Application(box Expr::Application(box Expr::Variable(op), e1), e2)
-                if { BIN_OPERATORS.contains(&op.as_str()) } =>
-            {
-                e1.pretty_print::<S>()
-                    .append(S::from_str(&format!(" {} ", op)))
-                    .append(e2.pretty_print())
+            &Expr::Application(a, b) => 'arm: {
+                if let Expr::Application(op, e1) = a.as_ref() {
+                    if let Expr::Variable(op) = op.as_ref() {
+                        if BIN_OPERATORS.contains(&op.as_str()) {
+                            break 'arm e1
+                                .pretty_print::<S>()
+                                .append(S::from_str(&format!(" {} ", op)))
+                                .append(b.pretty_print());
+                        }
+                    }
+                }
+
+                a.pretty_print::<S>()
+                    .append(S::from_str(" "))
+                    .append(b.pretty_print())
             }
-            &Expr::Application(a, b) => a
-                .pretty_print::<S>()
-                .append(S::from_str(" "))
-                .append(b.pretty_print()),
             &Expr::Let {
                 is_recursive,
                 definitions,
@@ -177,14 +183,26 @@ impl fmt::Display for CoreExpr {
     }
 }
 
+impl fmt::Display for CoreScDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)?;
+        for var in &self.bindings {
+            f.write_str(&var)?;
+        }
+        f.write_str(" = ")?;
+        write!(f, "{}", self.expression)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::rc::Rc;
     #[test]
     fn test_pretty_print() {
         let expr: CoreExpr = Expr::Application(
-            Box::new(Expr::Variable("f".into())),
-            Box::new(Expr::Variable("x".into())),
+            Rc::new(Expr::Variable("f".into())),
+            Rc::new(Expr::Variable("x".into())),
         );
 
         let formatted = format!("{expr}");
@@ -197,17 +215,17 @@ mod test {
                 (
                     "xx".into(),
                     Expr::Application(
-                        Box::new(Expr::Variable("square".into())),
-                        Box::new(Expr::Variable("x".into())),
+                        Rc::new(Expr::Variable("square".into())),
+                        Rc::new(Expr::Variable("x".into())),
                     ),
                 ),
             ],
-            body: Box::new(Expr::Application(
-                Box::new(Expr::Application(
-                    Box::new(Expr::Variable("+".into())),
-                    Box::new(Expr::Variable("xx".into())),
+            body: Rc::new(Expr::Application(
+                Rc::new(Expr::Application(
+                    Rc::new(Expr::Variable("+".into())),
+                    Rc::new(Expr::Variable("xx".into())),
                 )),
-                Box::new(Expr::Variable("x".into())),
+                Rc::new(Expr::Variable("x".into())),
             )),
         };
 

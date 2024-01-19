@@ -1,10 +1,12 @@
 #![allow(unused)]
 
+use std::rc::Rc;
+
 use nom::{
     branch::alt,
-    combinator::{opt, eof},
+    combinator::{eof, opt},
     multi::{many0, many1, separated_list1},
-    sequence::{delimited, pair, preceded, separated_pair, tuple, terminated},
+    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
     Finish, IResult, Parser,
 };
 // Refer to section 1.3
@@ -33,19 +35,19 @@ pub enum Expr<T> {
         tag: Tag,
         arity: usize,
     },
-    Application(Box<Expr<T>>, Box<Expr<T>>),
+    Application(Rc<Expr<T>>, Rc<Expr<T>>),
     Let {
         is_recursive: bool,
         definitions: Vec<(T, Expr<T>)>,
-        body: Box<Expr<T>>,
+        body: Rc<Expr<T>>,
     },
     Case {
-        expression: Box<Expr<T>>,
+        expression: Rc<Expr<T>>,
         alternatives: Vec<Alter<T>>,
     },
     Lambda {
         variables: Vec<T>,
-        expression: Box<Expr<T>>,
+        expression: Rc<Expr<T>>,
     },
 }
 
@@ -88,7 +90,7 @@ pub enum CoreParseErrorKind<'i> {
     NomError(nom::error::ErrorKind),
     Append {
         kind: nom::error::ErrorKind,
-        child_error: Box<CoreParseError<'i>>,
+        child_error: Rc<CoreParseError<'i>>,
     },
 }
 
@@ -97,7 +99,6 @@ pub struct CoreParseError<'i> {
     pub input: Vec<Token<'i>>,
     pub kind: CoreParseErrorKind<'i>,
 }
-
 
 impl<'i> nom::error::ParseError<TokenStream<'i, '_>> for CoreParseError<'i> {
     fn from_error_kind(input: TokenStream<'i, '_>, kind: nom::error::ErrorKind) -> Self {
@@ -112,8 +113,8 @@ impl<'i> nom::error::ParseError<TokenStream<'i, '_>> for CoreParseError<'i> {
             input: input.to_owned(),
             kind: CoreParseErrorKind::Append {
                 kind,
-                child_error: Box::new(other),
-            }
+                child_error: Rc::new(other),
+            },
         }
     }
 }
@@ -145,7 +146,7 @@ fn satisfy<'i: 'ts, 'ts>(
 {
     move |input| {
         if input.is_empty() {
-            Err(nom::Err::Error(CoreParseError{
+            Err(nom::Err::Error(CoreParseError {
                 kind: CoreParseErrorKind::UnexpectedEOF,
                 input: input.to_owned(),
             }))
@@ -226,7 +227,7 @@ fn let_expr<'i: 'ts, 'ts>(
     .map(|(keyword, definitions, _, expr)| CoreExpr::Let {
         is_recursive: keyword == "letrec",
         definitions,
-        body: Box::new(expr),
+        body: Rc::new(expr),
     })
     .parse(input)
 }
@@ -259,7 +260,7 @@ fn case_expr<'i: 'ts, 'ts>(
 ) -> IResult<TokenStream<'i, 'ts>, CoreExpr, CoreParseError<'i>> {
     tuple((token("case"), expr, token("of"), alts))
         .map(|(_, expression, _, alternatives)| CoreExpr::Case {
-            expression: Box::new(expression),
+            expression: Rc::new(expression),
             alternatives,
         })
         .parse(input)
@@ -271,7 +272,7 @@ fn lambda<'i: 'ts, 'ts>(
     tuple((token("\\"), many1(var), token("."), expr))
         .map(|(_, variables, _, expression)| CoreExpr::Lambda {
             variables: variables.iter().map(|s| s.to_string()).collect(),
-            expression: Box::new(expression),
+            expression: Rc::new(expression),
         })
         .parse(input)
 }
@@ -305,11 +306,11 @@ where
             .map(|(a, mp)| match mp {
                 None => a,
                 Some((op, b)) => CoreExpr::Application(
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Variable(op.to_string())),
-                        Box::new(a),
+                    Rc::new(CoreExpr::Application(
+                        Rc::new(CoreExpr::Variable(op.to_string())),
+                        Rc::new(a),
                     )),
-                    Box::new(b),
+                    Rc::new(b),
                 ),
             })
             .parse(input)
@@ -368,7 +369,7 @@ fn expr6<'i: 'ts, 'ts>(
         .map(|exprs| {
             exprs
                 .into_iter()
-                .reduce(|l, r| CoreExpr::Application(Box::new(l), Box::new(r)))
+                .reduce(|l, r| CoreExpr::Application(Rc::new(l), Rc::new(r)))
                 .unwrap()
         })
         .parse(input)
@@ -398,7 +399,9 @@ fn program<'i: 'ts, 'ts>(
 }
 
 fn parse_syntax<'i: 'ts, 'ts>(input: &'ts [Token<'i>]) -> Result<CoreProgram, CoreParseError<'i>> {
-    terminated(program, eof)(input).finish().map(move |(_, r)| r)
+    terminated(program, eof)(input)
+        .finish()
+        .map(move |(_, r)| r)
 }
 
 pub fn parse(input: &str) -> Result<CoreProgram, CoreParseError> {
@@ -421,8 +424,8 @@ mod test {
             name: "main".into(),
             bindings: vec![],
             expression: Expr::Application(
-                Box::new(Expr::Variable("double".into())),
-                Box::new(Expr::Number(21)),
+                Rc::new(Expr::Variable("double".into())),
+                Rc::new(Expr::Number(21)),
             ),
         };
 
@@ -438,11 +441,11 @@ mod test {
             name: "double".into(),
             bindings: vec!["x".into()],
             expression: Expr::Application(
-                Box::new(Expr::Application(
-                    Box::new(Expr::Variable("+".into())),
-                    Box::new(Expr::Variable("x".into())),
+                Rc::new(Expr::Application(
+                    Rc::new(Expr::Variable("+".into())),
+                    Rc::new(Expr::Variable("x".into())),
                 )),
-                Box::new(Expr::Variable("x".into())),
+                Rc::new(Expr::Variable("x".into())),
             ),
         };
 
@@ -461,19 +464,19 @@ mod test {
                 name: "main".into(),
                 bindings: vec![],
                 expression: Expr::Application(
-                    Box::new(Expr::Variable("double".into())),
-                    Box::new(Expr::Number(21)),
+                    Rc::new(Expr::Variable("double".into())),
+                    Rc::new(Expr::Number(21)),
                 ),
             },
             CoreScDef {
                 name: "double".into(),
                 bindings: vec!["x".into()],
                 expression: Expr::Application(
-                    Box::new(Expr::Application(
-                        Box::new(Expr::Variable("+".into())),
-                        Box::new(Expr::Variable("x".into())),
+                    Rc::new(Expr::Application(
+                        Rc::new(Expr::Variable("+".into())),
+                        Rc::new(Expr::Variable("x".into())),
                     )),
-                    Box::new(Expr::Variable("x".into())),
+                    Rc::new(Expr::Variable("x".into())),
                 ),
             },
         ];
@@ -487,25 +490,22 @@ mod test {
         let test = lex("x + y + z").unwrap();
 
         let expected = CoreExpr::Application(
-            Box::new(CoreExpr::Application(
-                Box::new(CoreExpr::Variable("+".into())),
-                Box::new(CoreExpr::Variable("x".into())),
+            Rc::new(CoreExpr::Application(
+                Rc::new(CoreExpr::Variable("+".into())),
+                Rc::new(CoreExpr::Variable("x".into())),
             )),
-            Box::new(CoreExpr::Application(
-                Box::new(CoreExpr::Application(
-                    Box::new(CoreExpr::Variable("+".into())),
-                    Box::new(CoreExpr::Variable("y".into()))
+            Rc::new(CoreExpr::Application(
+                Rc::new(CoreExpr::Application(
+                    Rc::new(CoreExpr::Variable("+".into())),
+                    Rc::new(CoreExpr::Variable("y".into())),
                 )),
-                Box::new(CoreExpr::Variable("z".into()))
+                Rc::new(CoreExpr::Variable("z".into())),
             )),
         );
 
         let res = expr(&test).unwrap();
 
-        assert_eq!(
-            (&[] as &[&str], expected),
-            res
-        );
+        assert_eq!((&[] as &[&str], expected), res);
     }
 
     #[test]
@@ -523,52 +523,55 @@ in x + y + z";
             is_recursive: false,
             definitions: vec![
                 ("x".into(), CoreExpr::Number(26)),
-                ("y".into(), CoreExpr::Application(
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Variable("*".into())),
-                        Box::new(CoreExpr::Variable("x".into()))
-                    )),
-                    Box::new(CoreExpr::Variable("x".into()))
-                )),
-                ("z".into(), CoreExpr::Application(
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Variable("+".into())),
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Application(
-                                Box::new(CoreExpr::Variable("*".into())),
-                                Box::new(CoreExpr::Variable("y".into()))
-                            )),
-                            Box::new(CoreExpr::Variable("y".into()))
-                        ))
-                    )),
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Variable("*".into())),
-                            Box::new(CoreExpr::Variable("y".into()))
+                (
+                    "y".into(),
+                    CoreExpr::Application(
+                        Rc::new(CoreExpr::Application(
+                            Rc::new(CoreExpr::Variable("*".into())),
+                            Rc::new(CoreExpr::Variable("x".into())),
                         )),
-                        Box::new(CoreExpr::Variable("y".into()))
-                    ))
-                )),
+                        Rc::new(CoreExpr::Variable("x".into())),
+                    ),
+                ),
+                (
+                    "z".into(),
+                    CoreExpr::Application(
+                        Rc::new(CoreExpr::Application(
+                            Rc::new(CoreExpr::Variable("+".into())),
+                            Rc::new(CoreExpr::Application(
+                                Rc::new(CoreExpr::Application(
+                                    Rc::new(CoreExpr::Variable("*".into())),
+                                    Rc::new(CoreExpr::Variable("y".into())),
+                                )),
+                                Rc::new(CoreExpr::Variable("y".into())),
+                            )),
+                        )),
+                        Rc::new(CoreExpr::Application(
+                            Rc::new(CoreExpr::Application(
+                                Rc::new(CoreExpr::Variable("*".into())),
+                                Rc::new(CoreExpr::Variable("y".into())),
+                            )),
+                            Rc::new(CoreExpr::Variable("y".into())),
+                        )),
+                    ),
+                ),
             ],
-            body: Box::new(CoreExpr::Application(
-                Box::new(CoreExpr::Application(
-                    Box::new(CoreExpr::Variable("+".into())),
-                    Box::new(CoreExpr::Variable("x".into())),
+            body: Rc::new(CoreExpr::Application(
+                Rc::new(CoreExpr::Application(
+                    Rc::new(CoreExpr::Variable("+".into())),
+                    Rc::new(CoreExpr::Variable("x".into())),
                 )),
-                Box::new(CoreExpr::Application(
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Variable("+".into())),
-                        Box::new(CoreExpr::Variable("y".into()))
+                Rc::new(CoreExpr::Application(
+                    Rc::new(CoreExpr::Application(
+                        Rc::new(CoreExpr::Variable("+".into())),
+                        Rc::new(CoreExpr::Variable("y".into())),
                     )),
-                    Box::new(CoreExpr::Variable("z".into()))
+                    Rc::new(CoreExpr::Variable("z".into())),
                 )),
             )),
         };
 
-        assert_eq!(
-            (&[] as &[&str], expected),
-            res
-        );
+        assert_eq!((&[] as &[&str], expected), res);
     }
 
     #[test]
@@ -587,44 +590,50 @@ in x + y + z";
                 is_recursive: false,
                 definitions: vec![
                     ("x".into(), CoreExpr::Number(26)),
-                    ("y".into(), CoreExpr::Application(
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Variable("*".into())),
-                            Box::new(CoreExpr::Variable("x".into()))
-                        )),
-                        Box::new(CoreExpr::Variable("x".into()))
-                    )),
-                    ("z".into(), CoreExpr::Application(
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Variable("+".into())),
-                            Box::new(CoreExpr::Application(
-                                Box::new(CoreExpr::Application(
-                                    Box::new(CoreExpr::Variable("*".into())),
-                                    Box::new(CoreExpr::Variable("y".into()))
-                                )),
-                                Box::new(CoreExpr::Variable("y".into()))
-                            ))
-                        )),
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Application(
-                                Box::new(CoreExpr::Variable("*".into())),
-                                Box::new(CoreExpr::Variable("y".into()))
+                    (
+                        "y".into(),
+                        CoreExpr::Application(
+                            Rc::new(CoreExpr::Application(
+                                Rc::new(CoreExpr::Variable("*".into())),
+                                Rc::new(CoreExpr::Variable("x".into())),
                             )),
-                            Box::new(CoreExpr::Variable("y".into()))
-                        ))
-                    )),
+                            Rc::new(CoreExpr::Variable("x".into())),
+                        ),
+                    ),
+                    (
+                        "z".into(),
+                        CoreExpr::Application(
+                            Rc::new(CoreExpr::Application(
+                                Rc::new(CoreExpr::Variable("+".into())),
+                                Rc::new(CoreExpr::Application(
+                                    Rc::new(CoreExpr::Application(
+                                        Rc::new(CoreExpr::Variable("*".into())),
+                                        Rc::new(CoreExpr::Variable("y".into())),
+                                    )),
+                                    Rc::new(CoreExpr::Variable("y".into())),
+                                )),
+                            )),
+                            Rc::new(CoreExpr::Application(
+                                Rc::new(CoreExpr::Application(
+                                    Rc::new(CoreExpr::Variable("*".into())),
+                                    Rc::new(CoreExpr::Variable("y".into())),
+                                )),
+                                Rc::new(CoreExpr::Variable("y".into())),
+                            )),
+                        ),
+                    ),
                 ],
-                body: Box::new(CoreExpr::Application(
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Variable("+".into())),
-                        Box::new(CoreExpr::Variable("x".into())),
+                body: Rc::new(CoreExpr::Application(
+                    Rc::new(CoreExpr::Application(
+                        Rc::new(CoreExpr::Variable("+".into())),
+                        Rc::new(CoreExpr::Variable("x".into())),
                     )),
-                    Box::new(CoreExpr::Application(
-                        Box::new(CoreExpr::Application(
-                            Box::new(CoreExpr::Variable("+".into())),
-                            Box::new(CoreExpr::Variable("y".into()))
+                    Rc::new(CoreExpr::Application(
+                        Rc::new(CoreExpr::Application(
+                            Rc::new(CoreExpr::Variable("+".into())),
+                            Rc::new(CoreExpr::Variable("y".into())),
                         )),
-                        Box::new(CoreExpr::Variable("z".into()))
+                        Rc::new(CoreExpr::Variable("z".into())),
                     )),
                 )),
             },
